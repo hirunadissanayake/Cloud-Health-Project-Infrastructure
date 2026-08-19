@@ -211,5 +211,5 @@ Never commit `terraform.tfvars`, state, database exports, credentials, or servic
 | Property | Value |
 |---|---|
 | Student | Hiruna Dissanayake |
-| Student number | `TODO` |
+| Student number | `24171104` |
 | GCP project | `cloud-health-506015-hiruna` |

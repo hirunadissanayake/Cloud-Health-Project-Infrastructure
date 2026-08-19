@@ -99,6 +99,21 @@ resource "google_compute_firewall" "public_platform_demo" {
   }
 }
 
+resource "google_compute_firewall" "public_eureka_demo" {
+  name        = "${local.name_prefix}-allow-eureka-demo"
+  description = "Direct Eureka dashboard access through ephemeral VM external IPs for the assessed demonstration."
+  network     = google_compute_network.main.name
+
+  direction     = "INGRESS"
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["cloud-health-backend"]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8761"]
+  }
+}
+
 resource "google_compute_firewall" "iap_ssh" {
   name    = "${local.name_prefix}-allow-iap-ssh"
   network = google_compute_network.main.name

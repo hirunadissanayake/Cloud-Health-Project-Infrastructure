@@ -29,6 +29,12 @@ resource "google_compute_instance_template" "application" {
   network_interface {
     network    = google_compute_network.main.id
     subnetwork = google_compute_subnetwork.application.id
+
+    # Ephemeral external IPv4 address for the assessed VM/Eureka demonstration.
+    # Production traffic should continue to enter through the load balancers.
+    access_config {
+      network_tier = "PREMIUM"
+    }
   }
 
   service_account {

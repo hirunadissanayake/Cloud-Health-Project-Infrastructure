@@ -68,7 +68,7 @@ SPRING_PROFILES_ACTIVE=git
 CONFIG_SERVER_URL=http://127.0.0.1:8888
 EUREKA_DEFAULT_ZONE=http://127.0.0.1:8761/eureka/
 HEALTHCARE_LOG_DIR=/var/log/cloud-health
-JAVA_TOOL_OPTIONS=-XX:InitialRAMPercentage=2.0 -XX:MaxRAMPercentage=12.0 -XX:+ExitOnOutOfMemoryError
+JAVA_TOOL_OPTIONS="-XX:InitialRAMPercentage=2.0 -XX:MaxRAMPercentage=12.0 -XX:+ExitOnOutOfMemoryError"
 ENV_HEADER
 
 cat >> /etc/cloud-health/runtime.env <<ENV_VALUES
@@ -166,6 +166,29 @@ PM2_CONFIG
 chown cloudhealth:cloudhealth /opt/cloud-health/ecosystem.config.cjs
 
 sudo -u cloudhealth env PM2_HOME=/home/cloudhealth/.pm2 pm2 start /opt/cloud-health/ecosystem.config.cjs
+
+wait_for_readiness() {
+  local application="$1"
+  local port="$2"
+  for attempt in $(seq 1 60); do
+    if curl --fail --silent "http://127.0.0.1:$port/actuator/health/readiness" >/dev/null; then
+      echo "$application is ready"
+      return 0
+    fi
+    sleep 5
+  done
+  echo "$application did not become ready within 5 minutes" >&2
+  return 1
+}
+
+# Dependent services may launch before Config Server on a fresh VM. Restart them
+# in dependency order so they always import the Git-backed configuration.
+wait_for_readiness "Config Server" 8888
+sudo -u cloudhealth env PM2_HOME=/home/cloudhealth/.pm2 pm2 restart discovery-server
+wait_for_readiness "Discovery Server" 8761
+sudo -u cloudhealth env PM2_HOME=/home/cloudhealth/.pm2 \
+  pm2 restart api-gateway patient-service diagnostics-service file-service
+
 sudo -u cloudhealth env PM2_HOME=/home/cloudhealth/.pm2 pm2 save
 env PATH="$PATH:/usr/bin" PM2_HOME=/home/cloudhealth/.pm2 pm2 startup systemd -u cloudhealth --hp /home/cloudhealth
 systemctl enable pm2-cloudhealth

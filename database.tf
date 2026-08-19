@@ -81,3 +81,52 @@ resource "google_firestore_database" "medical_metadata" {
 
   depends_on = [google_project_service.required["firestore.googleapis.com"]]
 }
+
+resource "google_firestore_index" "medical_files_by_patient" {
+  project     = var.project_id
+  database    = google_firestore_database.medical_metadata.name
+  collection  = "medical_files"
+  query_scope = "COLLECTION"
+
+  fields {
+    field_path = "patientId"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "status"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "uploadedAt"
+    order      = "DESCENDING"
+  }
+}
+
+resource "google_firestore_index" "medical_files_by_patient_and_category" {
+  project     = var.project_id
+  database    = google_firestore_database.medical_metadata.name
+  collection  = "medical_files"
+  query_scope = "COLLECTION"
+
+  fields {
+    field_path = "patientId"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "status"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "category"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "uploadedAt"
+    order      = "DESCENDING"
+  }
+}

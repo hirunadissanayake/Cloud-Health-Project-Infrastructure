@@ -23,7 +23,8 @@ if ! id cloudhealth >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash cloudhealth
 fi
 
-install -d -o cloudhealth -g cloudhealth /opt/cloud-health/apps /var/log/cloud-health /home/cloudhealth/.pm2
+install -d -o cloudhealth -g cloudhealth \
+  /opt/cloud-health/apps /opt/cloud-health/webapp /var/log/cloud-health /home/cloudhealth/.pm2
 install -d -m 0750 -o root -g cloudhealth /etc/cloud-health
 
 metadata_token() {
@@ -59,6 +60,23 @@ download_artifact() {
 for application in config-server discovery-server api-gateway patient-service diagnostics-service file-service; do
   download_artifact "$application"
 done
+
+echo "Downloading webapp"
+curl --fail --silent --show-error --retry 5 --retry-all-errors \
+  -H "Authorization: Bearer $TOKEN" \
+  "https://storage.googleapis.com/storage/v1/b/${artifact_bucket}/o/releases%2F${release_version}%2Fwebapp.tar.gz?alt=media" \
+  --output /tmp/cloud-health-webapp.tar.gz
+tar -xzf /tmp/cloud-health-webapp.tar.gz -C /opt/cloud-health/webapp
+chown -R cloudhealth:cloudhealth /opt/cloud-health/webapp
+rm -f /tmp/cloud-health-webapp.tar.gz
+
+cat > /opt/cloud-health/webapp-runner.mjs <<'WEBAPP_RUNNER'
+import { startServer } from './webapp/server.mjs';
+
+startServer();
+WEBAPP_RUNNER
+chown cloudhealth:cloudhealth /opt/cloud-health/webapp-runner.mjs
+chmod 0440 /opt/cloud-health/webapp-runner.mjs
 
 PATIENT_DB_PASSWORD="$(read_secret '${patient_password_secret}')"
 DIAGNOSTICS_MONGODB_URI="$(read_secret '${mongodb_uri_secret}')"
@@ -102,8 +120,12 @@ chmod 0755 /usr/local/bin/cloud-health-run
 cat > /opt/cloud-health/health-server.mjs <<'HEALTH_SERVER'
 import { createServer } from 'node:http';
 
-const checks = [8888, 8761, 8080, 8081, 8082, 8083].map(port =>
-  'http://127.0.0.1:' + port + '/actuator/health/readiness');
+const checks = [
+  ...[8888, 8761, 8080, 8081, 8082, 8083].map(port =>
+    'http://127.0.0.1:' + port + '/actuator/health/readiness'),
+  'http://127.0.0.1:3000/healthz',
+  'http://127.0.0.1:8870/healthz'
+];
 
 createServer(async (_request, response) => {
   const results = await Promise.allSettled(checks.map(url =>
@@ -126,6 +148,47 @@ createServer(async (_request, response) => {
 HEALTH_SERVER
 chown cloudhealth:cloudhealth /opt/cloud-health/health-server.mjs
 chmod 0440 /opt/cloud-health/health-server.mjs
+
+cat > /opt/cloud-health/platform-proxy.mjs <<'PLATFORM_PROXY'
+import { createServer, request } from 'node:http';
+
+createServer(async (clientRequest, clientResponse) => {
+  if (clientRequest.url === '/healthz') {
+    const checks = [8888, 8761].map(port =>
+      fetch('http://127.0.0.1:' + port + '/actuator/health/readiness', {
+        signal: AbortSignal.timeout(2500)
+      }).then(response => response.ok));
+    const results = await Promise.allSettled(checks);
+    const healthy = results.every(result => result.status === 'fulfilled' && result.value);
+    clientResponse.writeHead(healthy ? 200 : 503, { 'content-type': 'application/json' });
+    clientResponse.end(JSON.stringify({ status: healthy ? 'UP' : 'DOWN' }));
+    return;
+  }
+
+  const publicHost = clientRequest.headers.host || '';
+  const targetPort = publicHost.endsWith(':8761') ? 8761 : 8888;
+  const headers = { ...clientRequest.headers, host: '127.0.0.1:' + targetPort };
+  const upstream = request({
+    hostname: '127.0.0.1',
+    port: targetPort,
+    path: clientRequest.url,
+    method: clientRequest.method,
+    headers
+  }, upstreamResponse => {
+    clientResponse.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
+    upstreamResponse.pipe(clientResponse);
+  });
+  upstream.on('error', error => {
+    if (!clientResponse.headersSent) {
+      clientResponse.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
+    }
+    clientResponse.end('Platform service unavailable: ' + error.message);
+  });
+  clientRequest.pipe(upstream);
+}).listen(8870, '0.0.0.0');
+PLATFORM_PROXY
+chown cloudhealth:cloudhealth /opt/cloud-health/platform-proxy.mjs
+chmod 0440 /opt/cloud-health/platform-proxy.mjs
 
 cat > /opt/cloud-health/ecosystem.config.cjs <<'PM2_CONFIG'
 const applications = [
@@ -152,6 +215,28 @@ module.exports = {
       error: '/var/log/cloud-health/' + name + '-error.log',
       env: { SERVER_PORT: String(port) }
     })),
+    {
+      name: 'webapp',
+      script: '/opt/cloud-health/webapp-runner.mjs',
+      interpreter: 'node',
+      autorestart: true,
+      max_restarts: 20,
+      restart_delay: 5000,
+      output: '/var/log/cloud-health/webapp-out.log',
+      error: '/var/log/cloud-health/webapp-error.log',
+      env: {
+        PORT: '3000',
+        API_GATEWAY_URL: 'http://127.0.0.1:8080'
+      }
+    },
+    {
+      name: 'platform-proxy',
+      script: '/opt/cloud-health/platform-proxy.mjs',
+      interpreter: 'node',
+      autorestart: true,
+      output: '/var/log/cloud-health/platform-proxy-out.log',
+      error: '/var/log/cloud-health/platform-proxy-error.log'
+    },
     {
       name: 'health-monitor',
       script: '/opt/cloud-health/health-server.mjs',

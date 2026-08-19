@@ -80,7 +80,22 @@ resource "google_compute_firewall" "load_balancer_health" {
 
   allow {
     protocol = "tcp"
-    ports    = ["8080", "8090"]
+    ports    = ["3000", "8080", "8090", "8870"]
+  }
+}
+
+resource "google_compute_firewall" "public_platform_demo" {
+  name        = "${local.name_prefix}-allow-platform-demo"
+  description = "Public Config Server and Eureka access required for the assessed demonstration."
+  network     = google_compute_network.main.name
+
+  direction     = "INGRESS"
+  source_ranges = ["35.191.0.0/16", "130.211.0.0/22"]
+  target_tags   = ["cloud-health-backend"]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8870"]
   }
 }
 

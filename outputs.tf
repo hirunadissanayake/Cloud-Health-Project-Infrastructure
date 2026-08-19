@@ -7,6 +7,23 @@ output "api_url" {
   value = local.https_enabled ? "https://${trimsuffix(var.api_domain, ".")}" : "http://${google_compute_global_address.load_balancer.address}"
 }
 
+output "platform_load_balancer_ip" {
+  description = "Public demonstration endpoint for Config Server on 8888 and Eureka on 8761."
+  value       = google_compute_global_address.platform.address
+}
+
+output "config_server_url" {
+  value = "http://${google_compute_global_address.platform.address}:8888"
+}
+
+output "eureka_url" {
+  value = "http://${google_compute_global_address.platform.address}:8761"
+}
+
+output "webapp_url" {
+  value = "http://${google_compute_global_address.webapp.address}"
+}
+
 output "nat_egress_ip" {
   description = "Static Cloud NAT IPv4 address to allow as a /32 entry in MongoDB Atlas."
   value       = google_compute_address.nat.address

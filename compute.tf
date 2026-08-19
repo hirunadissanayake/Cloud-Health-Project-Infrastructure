@@ -103,6 +103,16 @@ resource "google_compute_region_instance_group_manager" "application" {
     port = 8090
   }
 
+  named_port {
+    name = "platform"
+    port = 8870
+  }
+
+  named_port {
+    name = "webapp"
+    port = 3000
+  }
+
   auto_healing_policies {
     health_check      = google_compute_health_check.application.id
     initial_delay_sec = 900

@@ -33,4 +33,15 @@ for entry in "${applications[@]}"; do
     "gs://$ARTIFACT_BUCKET/releases/$RELEASE_VERSION/$application.jar"
 done
 
-echo "Published six immutable application artifacts to release $RELEASE_VERSION."
+FRONTEND_ARCHIVE="$(mktemp -t cloud-health-frontend.XXXXXX.tar.gz)"
+trap 'rm -f "$FRONTEND_ARCHIVE"' EXIT
+
+echo "Packaging webapp"
+tar -czf "$FRONTEND_ARCHIVE" \
+  -C "$PROJECT_ROOT/frontend" \
+  package.json server.mjs public
+gcloud storage cp \
+  "$FRONTEND_ARCHIVE" \
+  "gs://$ARTIFACT_BUCKET/releases/$RELEASE_VERSION/webapp.tar.gz"
+
+echo "Published six Java applications and the webapp to release $RELEASE_VERSION."

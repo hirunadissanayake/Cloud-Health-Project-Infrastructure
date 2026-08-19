@@ -17,7 +17,7 @@ This repository is part of the Cloud Health Project for ITS 2130 Enterprise Clou
 | Cloud SQL | Highly available PostgreSQL 17 |
 | Cloud Storage / Firestore | Medical objects, artifacts, and metadata |
 | Secret Manager | MongoDB connection URI and database credentials |
-| Cloud Load Balancing | Global application entry point |
+| Cloud Load Balancing | Separate API, platform, and webapp entry points |
 | Workload Identity Federation | Keyless GitHub Actions authentication |
 
 ## Infrastructure Details
@@ -32,14 +32,13 @@ This repository is part of the Cloud Health Project for ITS 2130 Enterprise Clou
 ## Architecture
 
 ```text
-Users / Cloud Run frontend
-           |
-     Cloud DNS + HTTPS
-           |
-Global external Application Load Balancer
-           |
+Users
+  |--- lb-webapp --------------------> webapp :3000
+  |--- lb-api-gateway ---------------> API Gateway :8080
+  |--- lb-platform-configserver -----> Config Server :8888 / Eureka :8761
+                                      |
 Regional managed instance group (2+ private VMs across zones)
-  each VM: Config + Eureka + Gateway + 3 services + health monitor
+  each VM: Config + Eureka + Gateway + 3 services + webapp + health monitors
            |
      private VPC / Cloud NAT
        |          |          |             |
@@ -47,22 +46,22 @@ Regional managed instance group (2+ private VMs across zones)
   PostgreSQL  Secret/Atlas  metadata   files + artifacts
 ```
 
-The load balancer sends application traffic to port `8080`, but health and autohealing checks use port `8090`. The local health monitor only returns `200` when all six Spring processes report readiness. This prevents a gateway-only VM from receiving clinical traffic when a domain service is down.
+The three external Application Load Balancers use separate backend services and health checks while sharing the same regional MIG. Autohealing uses port `8090`. The local health monitor only returns `200` when all six Spring processes, the webapp, and the platform proxy report readiness.
 
 ## Resources
 
 - Custom-mode VPC, regional private subnet, flow logs, Private Google Access
 - Cloud Router and Cloud NAT with a reserved egress IP; application VMs receive no external IPs
-- Firewall access only from Google load-balancer health ranges and IAP SSH
+- Firewall access only from Google load-balancer proxy/health ranges and IAP SSH
 - Private-service networking allocation for Cloud SQL
 - Regional PostgreSQL 17 with HA, SSD, automated backups, PITR, query insights, and deletion protection
 - Firestore Native mode with PITR and deletion protection
 - Private, uniform-access, public-access-prevented artifact and medical-file buckets
 - Runtime service account with resource-scoped bucket and Secret Manager permissions
 - Regional MIG across at least two zones, proactive rolling replacement, autohealing, and CPU autoscaling
-- Global external Application Load Balancer with reserved IPv4, optional managed TLS, HTTP-to-HTTPS redirect, Cloud DNS, and DNSSEC
+- Three global external Application Load Balancers named `lb-api-gateway`, `lb-platform-configserver`, and `lb-webapp`
 - Optional GitHub Actions Workload Identity Federation restricted to one repository and the `main` branch
-- Artifact Registry repository used by the frontend Cloud Run build
+- Artifact Registry repository for optional Cloud Run builds and a versioned webapp artifact for the MIG
 
 MongoDB itself is expected to be an authenticated managed deployment such as MongoDB Atlas. Terraform stores its URI in Secret Manager and the VM startup script retrieves it through the metadata-server identity. No service-account key is created.
 
@@ -126,7 +125,7 @@ terraform apply -target=google_storage_bucket.artifacts
 ./scripts/publish-artifacts.sh YOUR_ARTIFACT_BUCKET v1
 ```
 
-The script runs all six Maven builds before uploading immutable, consistently named JARs under `releases/v1/`.
+The script runs all six Maven builds and packages the webapp before uploading the release artifacts under `releases/v1/`.
 
 ### 4. Plan and deploy
 
@@ -167,6 +166,17 @@ Test externally through the load balancer:
 ./scripts/smoke-test.sh "$(terraform output -raw api_url)"
 ```
 
+Lecturer-style recording endpoints are available from Terraform outputs:
+
+```bash
+terraform output -raw eureka_url
+terraform output -raw config_server_url
+terraform output -raw api_url
+terraform output -raw webapp_url
+```
+
+In Google Cloud Console, the Load balancing page shows `lb-api-gateway`, `lb-platform-configserver`, and `lb-webapp`. The platform load balancer has two frontends on the same IP: port `8888` for Config Server and port `8761` for the Eureka dashboard.
+
 Inspect a VM without exposing SSH publicly:
 
 ```bash
@@ -176,7 +186,7 @@ gcloud compute ssh INSTANCE_NAME \
   --command='sudo -u cloudhealth env PM2_HOME=/home/cloudhealth/.pm2 pm2 status && curl -fsS localhost:8090/healthz | jq'
 ```
 
-Expected PM2 processes are `config-server`, `discovery-server`, `api-gateway`, `patient-service`, `diagnostics-service`, `file-service`, and `health-monitor`. Restart persistence is configured through `pm2-cloudhealth.service`.
+Expected PM2 processes are `config-server`, `discovery-server`, `api-gateway`, `patient-service`, `diagnostics-service`, `file-service`, `webapp`, `platform-proxy`, and `health-monitor`. Restart persistence is configured through `pm2-cloudhealth.service`.
 
 ## Release and rollback
 

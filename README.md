@@ -52,7 +52,7 @@ The load balancer sends application traffic to port `8080`, but health and autoh
 ## Resources
 
 - Custom-mode VPC, regional private subnet, flow logs, Private Google Access
-- Cloud Router and Cloud NAT; application VMs receive no external IPs
+- Cloud Router and Cloud NAT with a reserved egress IP; application VMs receive no external IPs
 - Firewall access only from Google load-balancer health ranges and IAP SSH
 - Private-service networking allocation for Cloud SQL
 - Regional PostgreSQL 17 with HA, SSD, automated backups, PITR, query insights, and deletion protection
@@ -99,6 +99,15 @@ cp terraform.tfvars.example terraform.tfvars
 ```
 
 Set `project_id`, `config_git_uri`, and `diagnostics_mongodb_uri`. Real `.tfvars` files and Terraform state are ignored by Git.
+
+Create the static NAT address before the full deployment, then add the output as a single `/32` entry in the MongoDB Atlas IP access list:
+
+```bash
+terraform apply -target=google_compute_address.nat
+terraform output -raw nat_egress_ip
+```
+
+Do not allow `0.0.0.0/0` in Atlas.
 
 If the project already has a default Firestore database, import it rather than trying to create another:
 

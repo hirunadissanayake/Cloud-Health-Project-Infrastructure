@@ -7,6 +7,11 @@ output "api_url" {
   value = local.https_enabled ? "https://${trimsuffix(var.api_domain, ".")}" : "http://${google_compute_global_address.load_balancer.address}"
 }
 
+output "nat_egress_ip" {
+  description = "Static Cloud NAT IPv4 address to allow as a /32 entry in MongoDB Atlas."
+  value       = google_compute_address.nat.address
+}
+
 output "artifact_bucket" {
   value = google_storage_bucket.artifacts.name
 }

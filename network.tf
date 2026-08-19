@@ -26,11 +26,21 @@ resource "google_compute_router" "main" {
   network = google_compute_network.main.id
 }
 
+resource "google_compute_address" "nat" {
+  name         = "${local.name_prefix}-nat-ip"
+  region       = var.region
+  address_type = "EXTERNAL"
+  network_tier = "PREMIUM"
+
+  depends_on = [google_project_service.required["compute.googleapis.com"]]
+}
+
 resource "google_compute_router_nat" "main" {
   name                               = "${local.name_prefix}-nat"
   router                             = google_compute_router.main.name
   region                             = var.region
-  nat_ip_allocate_option             = "AUTO_ONLY"
+  nat_ip_allocate_option             = "MANUAL_ONLY"
+  nat_ips                            = [google_compute_address.nat.self_link]
   source_subnetwork_ip_ranges_to_nat = "LIST_OF_SUBNETWORKS"
 
   subnetwork {

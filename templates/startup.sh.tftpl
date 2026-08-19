@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+exec > >(tee -a /var/log/cloud-health-startup.log | logger -t cloud-health-startup) 2>&1
+
+echo "Starting Cloud Health release ${release_version}"
+export DEBIAN_FRONTEND=noninteractive
+
+for attempt in 1 2 3; do
+  apt-get update && apt-get install -y ca-certificates curl jq nodejs npm ${java_package} && break
+  if [ "$attempt" = 3 ]; then
+    echo "Package installation failed after three attempts" >&2
+    exit 1
+  fi
+  sleep 15
+done
+
+command -v java >/dev/null
+java -version
+npm install --global pm2@latest
+
+if ! id cloudhealth >/dev/null 2>&1; then
+  useradd --create-home --shell /bin/bash cloudhealth
+fi
+
+install -d -o cloudhealth -g cloudhealth /opt/cloud-health/apps /var/log/cloud-health /home/cloudhealth/.pm2
+install -d -m 0750 -o root -g cloudhealth /etc/cloud-health
+
+metadata_token() {
+  curl --fail --silent \
+    -H 'Metadata-Flavor: Google' \
+    'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token' \
+    | jq -r '.access_token'
+}
+
+TOKEN="$(metadata_token)"
+
+read_secret() {
+  local secret="$1"
+  curl --fail --silent \
+    -H "Authorization: Bearer $TOKEN" \
+    "https://secretmanager.googleapis.com/v1/projects/${project_id}/secrets/$secret/versions/latest:access" \
+    | jq -r '.payload.data' | tr '_-' '/+' | base64 --decode
+}
+
+download_artifact() {
+  local application="$1"
+  local destination="/opt/cloud-health/apps/$application.jar"
+  local object="releases%2F${release_version}%2F$application.jar"
+  echo "Downloading $application"
+  curl --fail --silent --show-error --retry 5 --retry-all-errors \
+    -H "Authorization: Bearer $TOKEN" \
+    "https://storage.googleapis.com/storage/v1/b/${artifact_bucket}/o/$object?alt=media" \
+    --output "$destination"
+  chown cloudhealth:cloudhealth "$destination"
+  chmod 0440 "$destination"
+}
+
+for application in config-server discovery-server api-gateway patient-service diagnostics-service file-service; do
+  download_artifact "$application"
+done
+
+PATIENT_DB_PASSWORD="$(read_secret '${patient_password_secret}')"
+DIAGNOSTICS_MONGODB_URI="$(read_secret '${mongodb_uri_secret}')"
+
+cat > /etc/cloud-health/runtime.env <<'ENV_HEADER'
+SPRING_PROFILES_ACTIVE=git
+CONFIG_SERVER_URL=http://127.0.0.1:8888
+EUREKA_DEFAULT_ZONE=http://127.0.0.1:8761/eureka/
+HEALTHCARE_LOG_DIR=/var/log/cloud-health
+JAVA_TOOL_OPTIONS=-XX:InitialRAMPercentage=2.0 -XX:MaxRAMPercentage=12.0 -XX:+ExitOnOutOfMemoryError
+ENV_HEADER
+
+cat >> /etc/cloud-health/runtime.env <<ENV_VALUES
+CONFIG_GIT_URI=${config_git_uri}
+CONFIG_GIT_BRANCH=${config_git_branch}
+PATIENT_DB_URL=jdbc:postgresql://${database_private_ip}:5432/${database_name}?sslmode=require
+PATIENT_DB_USERNAME=${database_user}
+PATIENT_DB_PASSWORD=$PATIENT_DB_PASSWORD
+DIAGNOSTICS_MONGODB_URI=$DIAGNOSTICS_MONGODB_URI
+GCP_PROJECT_ID=${project_id}
+MEDICAL_FILES_BUCKET=${medical_bucket}
+FIRESTORE_DATABASE=(default)
+FILE_METADATA_COLLECTION=medical_files
+SIGNED_URL_SERVICE_ACCOUNT=${runtime_service_account}
+ENV_VALUES
+
+unset PATIENT_DB_PASSWORD DIAGNOSTICS_MONGODB_URI
+chown root:cloudhealth /etc/cloud-health/runtime.env
+chmod 0640 /etc/cloud-health/runtime.env
+
+cat > /usr/local/bin/cloud-health-run <<'RUNNER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+set -a
+source /etc/cloud-health/runtime.env
+set +a
+exec java -jar "/opt/cloud-health/apps/$1.jar"
+RUNNER
+chmod 0755 /usr/local/bin/cloud-health-run
+
+cat > /opt/cloud-health/health-server.mjs <<'HEALTH_SERVER'
+import { createServer } from 'node:http';
+
+const checks = [8888, 8761, 8080, 8081, 8082, 8083].map(port =>
+  'http://127.0.0.1:' + port + '/actuator/health/readiness');
+
+createServer(async (_request, response) => {
+  const results = await Promise.allSettled(checks.map(url =>
+    fetch(url, { signal: AbortSignal.timeout(2500) }).then(result => {
+      if (!result.ok) throw new Error(url + ' returned ' + result.status);
+      return result.json();
+    })));
+  const healthy = results.every(result => result.status === 'fulfilled'
+    && result.value.status === 'UP');
+  response.statusCode = healthy ? 200 : 503;
+  response.setHeader('content-type', 'application/json');
+  response.end(JSON.stringify({
+    status: healthy ? 'UP' : 'DOWN',
+    services: results.map((result, index) => ({
+      url: checks[index],
+      status: result.status === 'fulfilled' ? result.value.status : 'DOWN'
+    }))
+  }));
+}).listen(8090, '0.0.0.0');
+HEALTH_SERVER
+chown cloudhealth:cloudhealth /opt/cloud-health/health-server.mjs
+chmod 0440 /opt/cloud-health/health-server.mjs
+
+cat > /opt/cloud-health/ecosystem.config.cjs <<'PM2_CONFIG'
+const applications = [
+  ['config-server', 8888],
+  ['discovery-server', 8761],
+  ['api-gateway', 8080],
+  ['patient-service', 8081],
+  ['diagnostics-service', 8082],
+  ['file-service', 8083]
+];
+
+module.exports = {
+  apps: [
+    ...applications.map(([name, port]) => ({
+      name,
+      script: '/usr/local/bin/cloud-health-run',
+      args: name,
+      interpreter: '/bin/bash',
+      autorestart: true,
+      max_restarts: 20,
+      restart_delay: 5000,
+      kill_timeout: 25000,
+      output: '/var/log/cloud-health/' + name + '-out.log',
+      error: '/var/log/cloud-health/' + name + '-error.log',
+      env: { SERVER_PORT: String(port) }
+    })),
+    {
+      name: 'health-monitor',
+      script: '/opt/cloud-health/health-server.mjs',
+      interpreter: 'node',
+      autorestart: true,
+      output: '/var/log/cloud-health/health-monitor-out.log',
+      error: '/var/log/cloud-health/health-monitor-error.log'
+    }
+  ]
+};
+PM2_CONFIG
+chown cloudhealth:cloudhealth /opt/cloud-health/ecosystem.config.cjs
+
+sudo -u cloudhealth env PM2_HOME=/home/cloudhealth/.pm2 pm2 start /opt/cloud-health/ecosystem.config.cjs
+sudo -u cloudhealth env PM2_HOME=/home/cloudhealth/.pm2 pm2 save
+env PATH="$PATH:/usr/bin" PM2_HOME=/home/cloudhealth/.pm2 pm2 startup systemd -u cloudhealth --hp /home/cloudhealth
+systemctl enable pm2-cloudhealth
+
+if curl --fail --silent --show-error --retry 3 \
+  https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh \
+  --output /tmp/add-google-cloud-ops-agent-repo.sh; then
+  bash /tmp/add-google-cloud-ops-agent-repo.sh --also-install || true
+fi
+
+if [ -d /etc/google-cloud-ops-agent ]; then
+  cat > /etc/google-cloud-ops-agent/config.yaml <<'OPS_AGENT'
+logging:
+  receivers:
+    cloud_health_files:
+      type: files
+      include_paths:
+        - /var/log/cloud-health/*.log
+  service:
+    pipelines:
+      cloud_health_pipeline:
+        receivers: [cloud_health_files]
+metrics:
+  service:
+    pipelines:
+      default_pipeline:
+        receivers: [hostmetrics]
+OPS_AGENT
+  systemctl restart google-cloud-ops-agent || true
+fi
+
+for attempt in $(seq 1 60); do
+  if curl --fail --silent http://127.0.0.1:8090/healthz >/dev/null; then
+    echo "All Cloud Health processes are ready"
+    exit 0
+  fi
+  sleep 10
+done
+
+echo "Applications did not become healthy within 10 minutes" >&2
+sudo -u cloudhealth env PM2_HOME=/home/cloudhealth/.pm2 pm2 status || true
+exit 1

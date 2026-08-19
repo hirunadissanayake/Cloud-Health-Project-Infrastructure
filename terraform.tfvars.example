@@ -1,0 +1,32 @@
+project_id = "your-gcp-project-id"
+
+region = "asia-south1"
+zones  = ["asia-south1-a", "asia-south1-b"]
+
+config_git_uri    = "https://github.com/your-account/Cloud-Health-Project-Platform-Config-Repository.git"
+config_git_branch = "main"
+
+# Store terraform.tfvars outside version control. This value is copied into
+# Secret Manager, but like all Terraform-managed secrets it is also present in
+# encrypted remote state.
+diagnostics_mongodb_uri = "mongodb+srv://user:password@cluster.example/healthcare_diagnostics"
+
+release_version = "v1"
+min_replicas    = 2
+max_replicas    = 4
+machine_type    = "e2-standard-4"
+
+# Optional HTTPS/DNS. Leave api_domain empty for an initial HTTP deployment.
+api_domain        = ""
+create_dns_zone   = false
+dns_zone_dns_name = ""
+
+# Optional keyless GitHub Actions identity, restricted to this repository and main.
+github_repository = ""
+
+# After baking the optional Packer image, use:
+# source_image = "projects/your-gcp-project-id/global/images/family/cloud-health-java25"
+
+labels = {
+  course = "its-2130"
+}

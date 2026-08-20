@@ -70,7 +70,7 @@ variable "min_replicas" {
 
 variable "max_replicas" {
   type    = number
-  default = 3
+  default = 4
 }
 
 variable "target_cpu_utilization" {

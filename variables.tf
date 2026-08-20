@@ -65,12 +65,12 @@ variable "boot_disk_size_gb" {
 
 variable "min_replicas" {
   type    = number
-  default = 2
+  default = 3
 }
 
 variable "max_replicas" {
   type    = number
-  default = 4
+  default = 3
 }
 
 variable "target_cpu_utilization" {

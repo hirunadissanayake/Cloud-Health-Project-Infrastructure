@@ -186,7 +186,7 @@ gcloud compute ssh INSTANCE_NAME \
   --command='sudo -u cloudhealth env PM2_HOME=/home/cloudhealth/.pm2 pm2 status && curl -fsS localhost:8090/healthz | jq'
 ```
 
-Expected PM2 processes are `config-server`, `discovery-server`, `api-gateway`, `patient-service`, `diagnostics-service`, `file-service`, `webapp`, `platform-proxy`, and `health-monitor`. Restart persistence is configured through `pm2-cloudhealth.service`.
+Expected PM2 processes are `config-server`, `discovery-server` (registered with Eureka as `SERVICE-REGISTRY`), `api-gateway`, `patient-service`, `diagnostics-service`, `file-service`, `webapp`, `platform-proxy`, and `health-monitor`. The three minimum MIG instances form a peer-aware Eureka registry. Restart persistence is configured through `pm2-cloudhealth.service`.
 
 ## Release and rollback
 

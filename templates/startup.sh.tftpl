@@ -36,6 +36,44 @@ metadata_token() {
 
 TOKEN="$(metadata_token)"
 
+discover_eureka_default_zone() {
+  local own_ip response peer_ip
+  local -a peer_ips peer_urls
+
+  own_ip="$(curl --fail --silent \
+    -H 'Metadata-Flavor: Google' \
+    'http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip')"
+
+  for attempt in $(seq 1 30); do
+    TOKEN="$(metadata_token)"
+    if response="$(curl --fail --silent --show-error \
+      -H "Authorization: Bearer $TOKEN" \
+      "https://compute.googleapis.com/compute/v1/projects/${project_id}/aggregated/instances")"; then
+      mapfile -t peer_ips < <(
+        jq -r --arg prefix '${instance_name_prefix}' \
+          '.items[]?.instances[]?
+           | select(.status == "RUNNING")
+           | select(.name | startswith($prefix))
+           | .networkInterfaces[0].networkIP' <<<"$response" | sort -u
+      )
+      if [ "$${#peer_ips[@]}" -ge 3 ]; then
+        break
+      fi
+    fi
+    echo "Waiting for three Eureka peer VMs (attempt $attempt/30)"
+    sleep 10
+  done
+
+  peer_urls=("http://$own_ip:8761/eureka/")
+  for peer_ip in "$${peer_ips[@]}"; do
+    if [ "$peer_ip" != "$own_ip" ]; then
+      peer_urls+=("http://$peer_ip:8761/eureka/")
+    fi
+  done
+
+  (IFS=,; echo "$${peer_urls[*]}")
+}
+
 read_secret() {
   local secret="$1"
   curl --fail --silent \
@@ -80,11 +118,15 @@ chmod 0440 /opt/cloud-health/webapp-runner.mjs
 
 PATIENT_DB_PASSWORD="$(read_secret '${patient_password_secret}')"
 DIAGNOSTICS_MONGODB_URI="$(read_secret '${mongodb_uri_secret}')"
+EUREKA_DEFAULT_ZONE="$(discover_eureka_default_zone)"
+
+echo "Configured Eureka peer endpoints: $EUREKA_DEFAULT_ZONE"
 
 cat > /etc/cloud-health/runtime.env <<'ENV_HEADER'
 SPRING_PROFILES_ACTIVE=git
 CONFIG_SERVER_URL=http://127.0.0.1:8888
-EUREKA_DEFAULT_ZONE=http://127.0.0.1:8761/eureka/
+EUREKA_REGISTER_WITH_EUREKA=true
+EUREKA_FETCH_REGISTRY=true
 HEALTHCARE_LOG_DIR=/var/log/cloud-health
 JAVA_TOOL_OPTIONS="-XX:InitialRAMPercentage=2.0 -XX:MaxRAMPercentage=12.0 -XX:+ExitOnOutOfMemoryError"
 ENV_HEADER
@@ -92,6 +134,7 @@ ENV_HEADER
 cat >> /etc/cloud-health/runtime.env <<ENV_VALUES
 CONFIG_GIT_URI=${config_git_uri}
 CONFIG_GIT_BRANCH=${config_git_branch}
+EUREKA_DEFAULT_ZONE=$EUREKA_DEFAULT_ZONE
 PATIENT_DB_URL=jdbc:postgresql://${database_private_ip}:5432/${database_name}?sslmode=require
 PATIENT_DB_USERNAME=${database_user}
 PATIENT_DB_PASSWORD=$PATIENT_DB_PASSWORD

@@ -61,6 +61,7 @@ resource "google_compute_instance_template" "application" {
     runtime_service_account = google_service_account.runtime.email
     config_git_uri          = var.config_git_uri
     config_git_branch       = var.config_git_branch
+    instance_name_prefix    = "${var.environment}-health"
   })
 
   shielded_instance_config {
@@ -80,6 +81,7 @@ resource "google_compute_instance_template" "application" {
   }
 
   depends_on = [
+    google_project_iam_member.runtime,
     google_storage_bucket_iam_member.runtime_artifact_reader,
     google_storage_bucket_iam_member.runtime_medical_objects,
     google_secret_manager_secret_version.patient_database_password,

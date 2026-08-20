@@ -7,6 +7,7 @@ resource "google_service_account" "runtime" {
 locals {
   runtime_project_roles = toset([
     "roles/cloudsql.client",
+    "roles/compute.viewer",
     "roles/datastore.user",
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter"

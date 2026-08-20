@@ -12,8 +12,8 @@ config_git_branch = "main"
 diagnostics_mongodb_uri = "mongodb+srv://user:password@cluster.example/healthcare_diagnostics"
 
 release_version = "v1"
-min_replicas    = 2
-max_replicas    = 4
+min_replicas    = 3
+max_replicas    = 3
 machine_type    = "e2-standard-4"
 
 # Optional HTTPS/DNS. Leave api_domain empty for an initial HTTP deployment.

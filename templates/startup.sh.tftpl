@@ -127,6 +127,9 @@ SPRING_PROFILES_ACTIVE=git
 CONFIG_SERVER_URL=http://127.0.0.1:8888
 EUREKA_REGISTER_WITH_EUREKA=true
 EUREKA_FETCH_REGISTRY=true
+EUREKA_CLIENT_HEALTHCHECK_ENABLED=false
+EUREKA_SERVER_ENABLE_SELF_PRESERVATION=true
+MANAGEMENT_HEALTH_MONGO_ENABLED=false
 HEALTHCARE_LOG_DIR=/var/log/cloud-health
 JAVA_TOOL_OPTIONS="-XX:InitialRAMPercentage=2.0 -XX:MaxRAMPercentage=12.0 -XX:+ExitOnOutOfMemoryError"
 ENV_HEADER
@@ -170,7 +173,13 @@ const checks = [
   'http://127.0.0.1:8870/healthz'
 ];
 
-createServer(async (_request, response) => {
+createServer(async (request, response) => {
+  if (request.url === '/livez') {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ status: 'UP' }));
+    return;
+  }
+
   const results = await Promise.allSettled(checks.map(url =>
     fetch(url, { signal: AbortSignal.timeout(2500) }).then(result => {
       if (!result.ok) throw new Error(url + ' returned ' + result.status);
@@ -269,7 +278,7 @@ module.exports = {
       error: '/var/log/cloud-health/webapp-error.log',
       env: {
         PORT: '3000',
-        API_GATEWAY_URL: 'http://127.0.0.1:8080'
+        API_GATEWAY_URL: '${api_gateway_url}'
       }
     },
     {

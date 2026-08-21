@@ -84,6 +84,21 @@ resource "google_compute_firewall" "load_balancer_health" {
   }
 }
 
+resource "google_compute_firewall" "internal_services" {
+  name        = "${local.name_prefix}-allow-internal-services"
+  description = "Allow Eureka peers and microservices in the application subnet to communicate."
+  network     = google_compute_network.main.name
+
+  direction     = "INGRESS"
+  source_ranges = [var.subnet_cidr]
+  target_tags   = ["cloud-health-backend"]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8080-8083", "8761", "8888"]
+  }
+}
+
 resource "google_compute_firewall" "public_platform_demo" {
   name        = "${local.name_prefix}-allow-platform-demo"
   description = "Public Config Server and Eureka access required for the assessed demonstration."

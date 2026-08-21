@@ -13,6 +13,21 @@ resource "google_compute_health_check" "application" {
   }
 }
 
+resource "google_compute_health_check" "autohealing" {
+  name                = "${local.name_prefix}-vm-liveness"
+  check_interval_sec  = 10
+  timeout_sec         = 5
+  healthy_threshold   = 2
+  unhealthy_threshold = 6
+
+  http_health_check {
+    port               = 8090
+    port_specification = "USE_FIXED_PORT"
+    request_path       = "/livez"
+    proxy_header       = "NONE"
+  }
+}
+
 resource "google_compute_instance_template" "application" {
   name_prefix  = "${local.name_prefix}-"
   machine_type = var.machine_type
@@ -62,6 +77,7 @@ resource "google_compute_instance_template" "application" {
     config_git_uri          = var.config_git_uri
     config_git_branch       = var.config_git_branch
     instance_name_prefix    = "${var.environment}-health"
+    api_gateway_url         = "http://${google_compute_global_address.load_balancer.address}"
   })
 
   shielded_instance_config {
@@ -122,12 +138,12 @@ resource "google_compute_region_instance_group_manager" "application" {
   }
 
   auto_healing_policies {
-    health_check      = google_compute_health_check.application.id
-    initial_delay_sec = 900
+    health_check      = google_compute_health_check.autohealing.id
+    initial_delay_sec = 300
   }
 
   update_policy {
-    type                           = "PROACTIVE"
+    type                           = "OPPORTUNISTIC"
     minimal_action                 = "REPLACE"
     most_disruptive_allowed_action = "REPLACE"
     max_surge_fixed                = 2
